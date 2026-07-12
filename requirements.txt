@@ -1,0 +1,12 @@
+python-dotenv>=1.0.0
+requests>=2.31.0
+gtfs-kit>=8.0.0
+gtfs-realtime-bindings>=1.0.0
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.0
+streamlit>=1.32.0
+pydeck>=0.8.0
+pyspark>=3.5.0
+pytest>=8.0.0
+pytest-cov>=4.1.0
+ruff>=0.3.0

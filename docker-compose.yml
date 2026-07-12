@@ -1,0 +1,110 @@
+name: transit-delay-pipeline
+
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: docker/airflow/Dockerfile
+  env_file:
+    - .env
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow/airflow
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+    PYTHONPATH: /opt/airflow/project
+    TRAFIKLAB_API_KEY: ${TRAFIKLAB_API_KEY:-}
+    TRAFIKLAB_STATIC_API_KEY: ${TRAFIKLAB_STATIC_API_KEY:-}
+    TRAFIKLAB_REALTIME_API_KEY: ${TRAFIKLAB_REALTIME_API_KEY:-}
+    STATIC_FEED: ${STATIC_FEED:-gtfs_sweden_3}
+    REALTIME_FEED: ${REALTIME_FEED:-gtfs_regional}
+    OPERATOR: ${OPERATOR:-sl}
+    OPERATOR_NAME: ${OPERATOR_NAME:-SL}
+    DATA_RAW_DIR: /opt/airflow/project/data/raw
+    PROJECT_ROOT: /opt/airflow/project
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./jobs:/opt/airflow/project/jobs
+    - ./config:/opt/airflow/project/config
+    - ./scripts:/opt/airflow/project/scripts
+    - ./data:/opt/airflow/project/data
+    - ./logs:/opt/airflow/project/logs
+    - ./.env:/opt/airflow/project/.env:ro
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres-airflow:
+      condition: service_healthy
+
+services:
+  postgres-airflow:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-airflow-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  postgres-analytics:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: transit
+      POSTGRES_PASSWORD: transit
+      POSTGRES_DB: transit_dw
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-analytics-volume:/var/lib/postgresql/data
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./sql/seed_dim_date.sql:/docker-entrypoint-initdb.d/02-seed_dim_date.sql
+      - ./sql/indexes.sql:/docker-entrypoint-initdb.d/03-indexes.sql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "transit"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com || true
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: unless-stopped
+
+volumes:
+  postgres-airflow-volume:
+  postgres-analytics-volume:

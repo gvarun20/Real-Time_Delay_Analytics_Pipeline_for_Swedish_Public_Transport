@@ -1,0 +1,42 @@
+# Environment
+.env
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Data & logs
+data/raw/**
+!data/raw/.gitkeep
+logs/**
+!logs/.gitkeep
+
+# Airflow
+airflow.db
+airflow.cfg
+standalone_admin_password.txt
+
+# Spark / Jupyter
+metastore_db/
+spark-warehouse/
+*.parquet
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# JARs (download locally)
+jars/*.jar
+!jars/.gitkeep
