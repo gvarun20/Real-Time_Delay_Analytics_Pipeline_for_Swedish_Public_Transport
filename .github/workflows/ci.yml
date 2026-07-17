@@ -9,6 +9,22 @@ on:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: transit
+          POSTGRES_PASSWORD: transit
+          POSTGRES_DB: transit_dw
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -22,5 +38,19 @@ jobs:
       - name: Ruff lint
         run: ruff check .
 
-      - name: Pytest
-        run: pytest --cov=jobs --cov=config --cov-report=term-missing -q
+      - name: Load star schema into Postgres service container
+        env:
+          PGPASSWORD: transit
+        run: |
+          psql -h localhost -p 5432 -U transit -d transit_dw -f sql/schema.sql
+          psql -h localhost -p 5432 -U transit -d transit_dw -f sql/seed_dim_date.sql
+          psql -h localhost -p 5432 -U transit -d transit_dw -f sql/indexes.sql
+
+      - name: Pytest (unit + integration, against the Postgres service container)
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_DB: transit_dw
+          POSTGRES_USER: transit
+          POSTGRES_PASSWORD: transit
+        run: pytest --cov=jobs --cov=config --cov=dashboard --cov-report=term-missing -q

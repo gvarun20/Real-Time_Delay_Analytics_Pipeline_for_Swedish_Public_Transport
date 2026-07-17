@@ -173,3 +173,39 @@ def record_pipeline_run(
                 (dag_run_id, service_date, status, rows_fact),
             )
         conn.commit()
+
+
+def update_dq_status(
+    service_date: str,
+    dq_status: str,
+    dag_run_id: str | None = None,
+) -> None:
+    """Set dq_status on the pipeline_runs row for this service_date.
+
+    Prefers matching by dag_run_id (unambiguous); falls back to the most
+    recently finished run for that service_date if no dag_run_id is given.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            if dag_run_id:
+                cur.execute(
+                    """
+                    UPDATE pipeline_runs SET dq_status = %s
+                    WHERE service_date = %s AND dag_run_id = %s
+                    """,
+                    (dq_status, service_date, dag_run_id),
+                )
+            if not dag_run_id or cur.rowcount == 0:
+                cur.execute(
+                    """
+                    UPDATE pipeline_runs SET dq_status = %s
+                    WHERE run_id = (
+                        SELECT run_id FROM pipeline_runs
+                        WHERE service_date = %s
+                        ORDER BY finished_at DESC NULLS LAST
+                        LIMIT 1
+                    )
+                    """,
+                    (dq_status, service_date),
+                )
+        conn.commit()

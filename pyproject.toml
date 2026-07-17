@@ -10,4 +10,4 @@ testpaths = ["tests"]
 pythonpath = ["."]
 
 [tool.coverage.run]
-source = ["jobs", "config"]
+source = ["jobs", "config", "dashboard"]

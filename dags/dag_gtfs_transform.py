@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from dags.common import DEFAULT_ARGS  # noqa: E402
 from jobs.transform.paths import latest_realtime_pb  # noqa: E402
 from jobs.transform_gtfs import run_transform  # noqa: E402
+from jobs.validate_data_quality import validate  # noqa: E402
 
 
 def transform_task(**context) -> int:
@@ -30,6 +31,10 @@ def transform_task(**context) -> int:
 
 def check_realtime_available(**context) -> None:
     latest_realtime_pb(context["ds"])
+
+
+def validate_data_quality_task(**context) -> None:
+    validate(context["ds"], dag_run_id=context.get("run_id"))
 
 
 with DAG(
@@ -46,7 +51,9 @@ with DAG(
 
     Reads landed raw files for the execution date, filters SL (Stockholm) data,
     joins static stop_times with realtime TripUpdates, computes delays,
-    and loads `fact_trip_delay` + dimensions in Postgres.
+    and loads `fact_trip_delay` + dimensions in Postgres. Then runs the data
+    quality check catalog (see `jobs/validate_data_quality.py`); ERROR-severity
+    checks fail this task (and the DAG run), WARN-severity checks only log.
 
     **Requires:** static + realtime data for the service date in `data/raw/`.
     """,
@@ -70,4 +77,9 @@ with DAG(
         execution_timeout=timedelta(hours=2),
     )
 
-    [wait_for_static, check_realtime] >> transform_with_pyspark
+    validate_data_quality = PythonOperator(
+        task_id="validate_data_quality",
+        python_callable=validate_data_quality_task,
+    )
+
+    [wait_for_static, check_realtime] >> transform_with_pyspark >> validate_data_quality

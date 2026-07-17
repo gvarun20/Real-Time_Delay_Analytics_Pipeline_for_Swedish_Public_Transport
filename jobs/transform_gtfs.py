@@ -314,10 +314,18 @@ def run_transform(
 
         delete_facts_for_date(date_key)
 
-        fact_batch: list[dict] = []
+        # Keyed by the fact table's natural key (trip_id, stop_key, stop_sequence) — date_key
+        # is constant for this run. A dict (not a list) so duplicate keys collapse to one row
+        # (last one wins) *before* they ever reach execute_values(). Without this, two rows
+        # sharing a key landing in the same insert batch raise psycopg2.errors.CardinalityViolation
+        # ("ON CONFLICT DO UPDATE command cannot affect row a second time") — seen in production
+        # on full (non-sampled) runs where the national realtime feed contains duplicate
+        # TripUpdate entities for the same trip/stop/sequence.
+        fact_batch: dict[tuple, dict] = {}
         total_inserted = 0
         rows_seen = 0
         skipped_no_dim = 0
+        duplicate_keys = 0
         for row in joined.toLocalIterator():
             rows_seen += 1
             route_key = route_keys.get(row.route_id)
@@ -332,26 +340,28 @@ def run_transform(
             vt_key = vehicle_type_keys.get(route_type, default_vt_key)
 
             delay_val = int(row.delay_seconds) if row.delay_seconds is not None else None
-            fact_batch.append(
-                {
-                    "date_key": date_key,
-                    "route_key": route_key,
-                    "stop_key": stop_key,
-                    "vehicle_type_key": vt_key,
-                    "trip_id": row.trip_id,
-                    "stop_sequence": int(row.stop_sequence),
-                    "scheduled_arrival": row.scheduled_arrival,
-                    "actual_arrival": row.actual_arrival,
-                    "delay_seconds": delay_val,
-                    "data_source": "gtfs_rt",
-                }
-            )
+            stop_sequence = int(row.stop_sequence)
+            key = (row.trip_id, stop_key, stop_sequence)
+            if key in fact_batch:
+                duplicate_keys += 1
+            fact_batch[key] = {
+                "date_key": date_key,
+                "route_key": route_key,
+                "stop_key": stop_key,
+                "vehicle_type_key": vt_key,
+                "trip_id": row.trip_id,
+                "stop_sequence": stop_sequence,
+                "scheduled_arrival": row.scheduled_arrival,
+                "actual_arrival": row.actual_arrival,
+                "delay_seconds": delay_val,
+                "data_source": "gtfs_rt",
+            }
             if len(fact_batch) >= 5000:
-                total_inserted += insert_facts(fact_batch)
-                fact_batch = []
+                total_inserted += insert_facts(list(fact_batch.values()))
+                fact_batch = {}
 
         if fact_batch:
-            total_inserted += insert_facts(fact_batch)
+            total_inserted += insert_facts(list(fact_batch.values()))
 
         if skipped_no_dim:
             logger.warning(
@@ -361,6 +371,12 @@ def run_transform(
                 rows_seen,
                 len(route_keys),
                 len(stop_keys),
+            )
+        if duplicate_keys:
+            logger.warning(
+                "Fact loop: collapsed %d duplicate (trip_id, stop_key, stop_sequence) rows "
+                "before insert (realtime feed likely had duplicate TripUpdate entities)",
+                duplicate_keys,
             )
 
         record_pipeline_run(service_date, "success", total_inserted, dag_run_id)
